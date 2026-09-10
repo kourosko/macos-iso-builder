@@ -1,0 +1,98 @@
+name: Build pinned Tahoe installer ISO
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 100
+
+    env:
+      INSTALLER_PATH: /Applications/Install macOS Tahoe.app
+      PKG_BYTES: "18301025735"
+      PKG_SHA256: 2DB7CB0829D81CB21A14C2180B1063FB54CCB418C1F0F0205903435EA774BFAC
+      PKG_URL: https://swcdn.apple.com/content/downloads/22/07/122-84023-A_RQPL3GX2L6/l6vt7agjz206oaiyhvc0a4wupeffjk36st/InstallAssistant.pkg
+
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+
+      - name: Show runner capacity
+        shell: bash
+        run: |
+          set -euo pipefail
+          sw_vers
+          uname -m
+          df -h /
+
+      - name: Download and verify installer package
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg_path="$RUNNER_TEMP/InstallAssistant.pkg"
+
+          curl --fail --location --retry 3 --retry-all-errors \
+            --output "$pkg_path" "$PKG_URL"
+
+          actual_bytes="$(stat -f '%z' "$pkg_path")"
+          test "$actual_bytes" = "$PKG_BYTES"
+          printf '%s  %s\n' "$PKG_SHA256" "$pkg_path" | shasum -a 256 -c -
+          pkgutil --check-signature "$pkg_path" | tee "$RUNNER_TEMP/pkg-signature.txt"
+
+      - name: Install macOS installer application
+        shell: bash
+        run: |
+          set -euo pipefail
+          pkg_path="$RUNNER_TEMP/InstallAssistant.pkg"
+
+          sudo installer -pkg "$pkg_path" -target /
+          test -d "$INSTALLER_PATH"
+
+          defaults read "$INSTALLER_PATH/Contents/Info.plist" \
+            CFBundleShortVersionString | tee "$RUNNER_TEMP/installer-app-version.txt"
+
+          rm -f "$pkg_path"
+          df -h /
+
+      - name: Create bootable ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x ./mkmaciso
+          ./mkmaciso Tahoe iso "$GITHUB_WORKSPACE/macOS_Tahoe.iso"
+
+          iso_count="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f \
+            -name 'macOS_Tahoe_*.iso' | wc -l | tr -d ' ')"
+          test "$iso_count" = "1"
+
+          iso_path="$(find "$GITHUB_WORKSPACE" -maxdepth 1 -type f \
+            -name 'macOS_Tahoe_*.iso' -print -quit)"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          mv "$iso_path" "$GITHUB_WORKSPACE/artifacts/"
+
+          final_iso="$GITHUB_WORKSPACE/artifacts/$(basename "$iso_path")"
+          shasum -a 256 "$final_iso" | tee "$final_iso.sha256"
+          cp "$RUNNER_TEMP/pkg-signature.txt" "$GITHUB_WORKSPACE/artifacts/"
+          cp "$RUNNER_TEMP/installer-app-version.txt" "$GITHUB_WORKSPACE/artifacts/"
+
+          {
+            printf 'builder_commit=%s\n' "$GITHUB_SHA"
+            printf 'installer_url=%s\n' "$PKG_URL"
+            printf 'installer_bytes=%s\n' "$PKG_BYTES"
+            printf 'installer_sha256=%s\n' "$PKG_SHA256"
+            printf 'iso_file=%s\n' "$(basename "$final_iso")"
+          } > "$GITHUB_WORKSPACE/artifacts/build-manifest.txt"
+
+      - name: Upload installation media
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: macOS-Tahoe-pinned-installer
+          path: artifacts/
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+          archive: false
