@@ -91,8 +91,18 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: macOS-Tahoe-pinned-installer
-          path: artifacts/
+          path: artifacts/*.iso
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
           archive: false
+
+      - name: Upload verification records
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: macOS-Tahoe-pinned-installer-verification
+          path: |
+            artifacts/*.sha256
+            artifacts/*.txt
+          retention-days: 1
+          if-no-files-found: error
